@@ -1,0 +1,10 @@
+# Core dependencies
+requests>=2.28.0
+numpy>=1.22.0
+opencv-python>=4.5.0
+ultralytics>=8.0.0  # For YOLOv8
+boto3>=1.26.0       # For S3 access
+python-dotenv>=0.21.0  # For environment variables
+
+# Optional dependencies
+tqdm>=4.64.0        # For progress bars
