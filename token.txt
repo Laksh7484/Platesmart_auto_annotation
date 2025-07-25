@@ -1,1 +1,1 @@
-Your legacy token: 5ab72f2af64a3e5dbb2d7fe64cc9ae8bc057207e
+Your legacy token: "Your legacy token"

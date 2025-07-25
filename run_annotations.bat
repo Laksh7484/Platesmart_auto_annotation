@@ -32,7 +32,7 @@ echo Starting annotation process for project ID: !PROJECT_ID!
 echo.
 
 REM Run the Python script with the provided project ID
-.venv\Scripts\python.exe process_annotations.py --project-id !PROJECT_ID!
+.venv\Scripts\python.exe Script\process_annotations.py --project-id !PROJECT_ID!
 
 REM Check if the script executed successfully
 if errorlevel 1 (
