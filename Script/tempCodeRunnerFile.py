@@ -32,14 +32,8 @@ for task in data:
             y = res["value"]["y"]
             w = res["value"]["width"]
             h = res["value"]["height"]
-            img_w = res.get("original_width") or task["data"].get("width")
-            img_h = res.get("original_height") or task["data"].get("height")
-
-            # If still missing, set default (so script doesn't crash)
-            if not img_w or not img_h:
-                print(f"⚠️ Missing width/height for {file_name}, skipping...")
-                continue
-
+            img_w = res["original_width"]
+            img_h = res["original_height"]
 
             abs_x = x * img_w / 100
             abs_y = y * img_h / 100

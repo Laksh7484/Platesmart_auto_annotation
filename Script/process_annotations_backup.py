@@ -8,7 +8,6 @@ import base64
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from ultralytics import YOLO
 
 # Load mappings from JSON file
 def load_mappings():
@@ -98,12 +97,6 @@ PLATE_RECOGNIZER_URL = "http://localhost:8080/v1/plate-reader/"
 
 HEADERS = {"Authorization": f"Token {API_TOKEN}"}
 PLATE_RECOGNIZER_HEADERS = {"Authorization": f"Token {PLATE_RECOGNIZER_TOKEN}"}
-
-# Load YOLO models for fallback detection
-print("Loading YOLO models...")
-CAR_MODEL = YOLO("Models/yolov8n.pt")
-PLATE_MODEL = YOLO("Models/license_plate_detector.pt")
-print("YOLO models loaded successfully!")
 
 def fetch_tasks():
     """Export tasks from Label Studio with pagination support"""
@@ -306,82 +299,20 @@ def detect_with_plate_recognizer(img_bytes, task_id):
             return None
 
         result = resp.json()
+
+        # Debug saving is disabled by default
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # debug_filename = f"plate_recognizer_results/task_{task_id}_{timestamp}.json"
+        # os.makedirs("plate_recognizer_results", exist_ok=True)
+        # with open(debug_filename, 'w') as f:
+        #     json.dump(result, f, indent=2)
+        # print(f"💾 Saved Plate Recognizer Snapshot SDK response to: {debug_filename}")
+
         return result
 
     except Exception as e:
         print(f"Error calling Plate Recognizer Snapshot SDK: {e}")
         return None
-
-def detect_with_yolo(img_bytes, img_width, img_height, task_id):
-    """Fallback detection using YOLO models when Plate Recognizer returns no results"""
-    try:
-        import uuid
-        # Decode image
-        img_array = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img_array is None:
-            return []
-        
-        annotations = []
-        
-        # Detect cars
-        car_results = CAR_MODEL(img_array, conf=0.25, verbose=False)
-        for result in car_results:
-            boxes = result.boxes
-            for box in boxes:
-                # Only detect cars (class 2 in COCO dataset)
-                if int(box.cls[0]) == 2:  # car class
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    xc, yc, bw, bh = normalize(x1, y1, x2, y2, img_width, img_height)
-                    car_id = str(uuid.uuid4())[:10]
-                    
-                    # Create car annotation
-                    car_rect = {
-                        "id": car_id,
-                        "type": "rectanglelabels",
-                        "value": {
-                            "x": float(round((xc - bw / 2) * 100, 4)),
-                            "y": float(round((yc - bh / 2) * 100, 4)),
-                            "width": float(round(bw * 100, 4)),
-                            "height": float(round(bh * 100, 4)),
-                            "rotation": 0,
-                            "rectanglelabels": ["Car"]
-                        },
-                        "from_name": "labels",
-                        "to_name": "image"
-                    }
-                    annotations.append(car_rect)
-        
-        # Detect license plates
-        plate_results = PLATE_MODEL(img_array, conf=0.25, verbose=False)
-        for result in plate_results:
-            boxes = result.boxes
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                xc, yc, bw, bh = normalize(x1, y1, x2, y2, img_width, img_height)
-                plate_id = str(uuid.uuid4())[:10]
-                
-                # Create plate annotation
-                plate_rect = {
-                    "id": plate_id,
-                    "type": "rectanglelabels",
-                    "value": {
-                        "x": float(round((xc - bw / 2) * 100, 4)),
-                        "y": float(round((yc - bh / 2) * 100, 4)),
-                        "width": float(round(bw * 100, 4)),
-                        "height": float(round(bh * 100, 4)),
-                        "rotation": 0,
-                        "rectanglelabels": ["License plate"]
-                    },
-                    "from_name": "labels",
-                    "to_name": "image"
-                }
-                annotations.append(plate_rect)
-        
-        return annotations
-        
-    except Exception as e:
-        print(f"Error calling YOLO fallback detection: {e}")
-        return []
 
 def convert_plate_recognizer_to_label_studio(api_result, img_width, img_height):
     """Convert Plate Recognizer API response to Label Studio format (manual annotation structure)"""
@@ -629,64 +560,21 @@ def process_single_task(task, worker_id):
 
         # Detect objects using Plate Recognizer API
         api_result = detect_with_plate_recognizer(img_bytes, task_id)
-        results = []
-        detection_method = "unknown"
-        
-        if api_result and api_result.get('results'):
+        if api_result:
             # Convert API result to Label Studio format
             results = convert_plate_recognizer_to_label_studio(api_result, img_width, img_height)
-            detection_method = "Plate Recognizer"
-        
-        # Check what we found
-        found_car = False
-        found_plate = False
-        for r in results:
-            if "rectanglelabels" in r.get("value", {}):
-                labels = r["value"]["rectanglelabels"]
-                if "Car" in labels:
-                    found_car = True
-                if "License plate" in labels:
-                    found_plate = True
-
-        # If we are missing either car or plate, try to find them with YOLO
-        if not found_car or not found_plate:
-            # If we already have some results, we are augmenting. If not, we are fully falling back.
-            is_fallback = (len(results) == 0)
-            
-            yolo_results = detect_with_yolo(img_bytes, img_width, img_height, task_id)
-            
-            # Filter YOLO results to only add what we are missing
-            added_from_yolo = 0
-            for y_res in yolo_results:
-                y_labels = y_res["value"]["rectanglelabels"]
-                
-                # If we lack a car and YOLO found one, add it
-                if "Car" in y_labels and not found_car:
-                    results.append(y_res)
-                    added_from_yolo += 1
-                
-                # If we lack a plate and YOLO found one, add it
-                elif "License plate" in y_labels and not found_plate:
-                    results.append(y_res)
-                    added_from_yolo += 1
-            
-            if added_from_yolo > 0:
-                if is_fallback:
-                    detection_method = "YOLO"
-                    print(f"[Worker {worker_id}] Plate Recognizer found nothing, using YOLO fallback for task {task_id}")
-                else:
-                    detection_method += " + YOLO"
-                    print(f"[Worker {worker_id}] Augmented Plate Recognizer results with {added_from_yolo} YOLO detections for task {task_id}")
-        
-        if results:
-            # Post annotations directly
-            annotation = {"result": results}
-            post_annotation(task_id, annotation)
-            print(f"[Worker {worker_id}] Successfully processed task {task_id} using {detection_method}")
-            return {"status": "success", "task_id": task_id, "method": detection_method}
+            if results:
+                # Post annotations directly
+                annotation = {"result": results}
+                post_annotation(task_id, annotation)
+                print(f"[Worker {worker_id}] Successfully processed task {task_id}")
+                return {"status": "success", "task_id": task_id}
+            else:
+                print(f"[Worker {worker_id}] No objects detected in task {task_id}")
+                return {"status": "success", "task_id": task_id, "reason": "no_objects"}
         else:
-            print(f"[Worker {worker_id}] No objects detected in task {task_id} with any method")
-            return {"status": "success", "task_id": task_id, "reason": "no_objects"}
+            print(f"[Worker {worker_id}] Failed to get results from Plate Recognizer Snapshot SDK for task {task_id}")
+            return {"status": "error", "task_id": task_id, "reason": "api_failed"}
             
     except KeyError as e:
         print(f"[Worker {worker_id}] Missing data in task {task.get('id', 'unknown')}: {e}")
